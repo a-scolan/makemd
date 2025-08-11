@@ -57,6 +57,43 @@ export class FilesystemSpaceAdapter implements SpaceAdapter {
     public initiateAdapter(manager: SpaceManager) {
       
       this.spaceManager = manager;
+
+      // Ensure all included folders have a .space/def.json on every adapter init (workspace refresh)
+      this.ensureAllSpacesHaveDef();
+    }
+
+    /**
+     * Ensures every folder that is a space has a .space/def.json file.
+     * Called on every workspace refresh/init.
+     */
+    public async ensureAllSpacesHaveDef() {
+      // Get all folders that are spaces
+      const folders = this.fileSystem.allFiles().filter(f => f.isFolder);
+      for (const folder of folders) {
+        // Check if this folder is included in a space (basic check: has a note or is in spacesIndex)
+        // You may want to refine this logic if needed
+        const spaceInfo = this.spaceInfoForPath(folder.path);
+        const defPath = spaceInfo.defPath;
+        const defFile = await this.fileSystem.getFile(defPath);
+        if (!defFile) {
+          // Create default def.json if missing
+          const extension = defPath.split('.').pop();
+          const folderDir = defPath.split('/').slice(0, -1).join('/');
+          const filename = defPath.split('/').pop().split('.')[0];
+          await this.fileSystem.createFolder(folderDir);
+          await this.fileSystem.newFile(folderDir, filename, extension);
+          await this.fileSystem.writeTextToFile(defPath, JSON.stringify({
+            _joins: [] as any[],
+            _contexts: [] as any[],
+            _links: [] as any[],
+            _sort: { field: "rank", asc: false, group: false, recursive: false },
+            _template: "",
+            _templateName: "",
+            defaultSticker: "",
+            readMode: false
+          }));
+        }
+      }
     }
 
     public onFocusesUpdated = () => {
@@ -409,6 +446,29 @@ export class FilesystemSpaceAdapter implements SpaceAdapter {
     return {...table, rows}
   }
   public async spaceInitiated (path: string) {
+    // Ensure .space/def.json exists for any folder included in a space
+    const spaceInfo = this.spaceInfoForPath(path);
+    const defFile = await this.fileSystem.getFile(spaceInfo.defPath);
+    if (!defFile) {
+      // Create default def.json if missing
+      const defPath = spaceInfo.defPath;
+      const extension = defPath.split('.').pop();
+      const folder = defPath.split('/').slice(0, -1).join('/');
+      const filename = defPath.split('/').pop().split('.')[0];
+      await this.fileSystem.createFolder(folder);
+      await this.fileSystem.newFile(folder, filename, extension);
+      // Write default content
+      await this.fileSystem.writeTextToFile(defPath, JSON.stringify({
+        _joins: [] as any[],
+        _contexts: [] as any[],
+        _links: [] as any[],
+        _sort: { field: "rank", asc: false, group: false, recursive: false },
+        _template: "",
+        _templateName: "",
+        defaultSticker: "",
+        readMode: false
+      }));
+    }
     return true;
   }
 public async contextInitiated (path: string) {
@@ -884,9 +944,21 @@ const defaultSpaceTemplate = this.defaultFrame(path);
 
       const newPath = spaceInfo.folderPath == '/' ? name : spaceInfo.folderPath+'/'+name;
       await this.fileSystem.createFolder(newPath);
-      if (Object.keys(definition ?? {}).length > 0)
-        return this.saveSpace(newPath, () => definition);
-      
+
+      // Always create a .space/def.json, even if no definition is provided
+      const defaultDef = {
+        _joins: [],
+        _contexts: [],
+        _links: [],
+        _sort: { field: "rank", asc: false, group: false, recursive: false },
+        _template: "",
+        _templateName: "",
+        defaultSticker: "",
+        readMode: false
+      };
+
+      const defToUse = Object.keys(definition ?? {}).length > 0 ? definition : defaultDef;
+      return this.saveSpace(newPath, () => defToUse);
     }
 
     public async saveSpace (path: string, definitionFn: (def: SpaceDefinition) => SpaceDefinition, properties?: Record<string, any>) {
